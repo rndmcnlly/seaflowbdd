@@ -95,14 +95,14 @@ Two cuts. **`from_scratch`** builds a fresh seaflowbdd `Manager` per iteration (
 
 | Workload | seaflowbdd | C++ oracle | ratio |
 |---|---:|---:|---:|
-| `projection_construction_32` | 3.00 µs | 35.36 µs | **0.08× (11.8× faster)** |
-| `and_tree/32 from_scratch` | 34.34 µs | 40.94 µs | 0.84× (1.2× faster) |
-| `and_tree/8 from_scratch` | 15.56 µs | 10.22 µs | 1.52× |
-| `and_tree/4 from_scratch` | 8.44 µs | 5.07 µs | 1.66× |
-| `and_tree/32 warm` | 1.58 µs | 4.68 µs | 0.34× (2.9× faster) |
-| `or_tree/32 warm` | 1.61 µs | 4.67 µs | 0.34× (2.9× faster) |
-| `xor_tree/32 warm` | 1.63 µs | 4.76 µs | 0.34× (2.9× faster) |
-| `repeated_apply` (16 vars × 100 iters) | 76 µs | 226 µs | 0.34× (3.0× faster) |
+| `projection_construction_32` | 2.99 µs | 35.40 µs | **0.08× (11.8× faster)** |
+| `and_tree/32 from_scratch` | 34.36 µs | 40.99 µs | 0.84× (1.2× faster) |
+| `and_tree/8 from_scratch` | 15.65 µs | 10.13 µs | 1.55× |
+| `and_tree/4 from_scratch` | 8.67 µs | 5.11 µs | 1.70× |
+| `and_tree/32 warm` | 1.52 µs | 4.77 µs | 0.32× (3.1× faster) |
+| `or_tree/32 warm` | 1.54 µs | 4.76 µs | 0.32× (3.1× faster) |
+| `xor_tree/32 warm` | 1.52 µs | 4.82 µs | 0.31× (3.2× faster) |
+| `repeated_apply` (16 vars × 100 iters) | 74.9 µs | 226.2 µs | 0.33× (3.0× faster) |
 
 Every measured op is within 2× of the C++ engine's wall-clock, and most are several times faster.
 
