@@ -1,0 +1,22 @@
+[package]
+name = "seaflowbdd"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Native Rust engine for Context-Free-Language Ordered Binary Decision Diagrams (CFLOBDDs). Unweighted boolean operations: AND, OR, XOR, NOT, restrict, compose, exists, forall, evaluate, satisfying-assignment count."
+license = "MIT"
+repository = "https://github.com/rndmcnlly/seaflowbdd"
+homepage = "https://github.com/rndmcnlly/seaflowbdd"
+readme = "README.md"
+keywords = ["cflobdd", "bdd", "decision-diagram", "boolean", "symbolic"]
+categories = ["data-structures", "algorithms", "mathematics"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+hashbrown = "0.15"
+smallvec = "1"
+
+[dev-dependencies]
+proptest = "1"
