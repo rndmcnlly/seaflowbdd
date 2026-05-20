@@ -8,7 +8,7 @@ The name is a phonetic spelling of **CFLOBDD** as you'd say it after you've stop
 
 ## Status
 
-**v0.1: unweighted boolean operations only.** The engine implements the full CFLOBDD pipeline (hash-cons canonical store, PairProduct, Reduce, ApplyAndReduce) for boolean-valued functions. Weighted variants (complex, big-float, Fourier) and parallelism are out of scope for this release.
+**v0.2: unweighted boolean operations, optimized.** The engine implements the full CFLOBDD pipeline (hash-cons canonical store, PairProduct, Reduce, ApplyAndReduce) for boolean-valued functions. Phase 2 optimizations have brought wall-clock performance to parity with or better than the C++ reference engine on every measured workload, with at least one workload running ≥10× faster (see [Performance](#performance)). Weighted variants (complex, big-float, Fourier) and parallelism are out of scope for this release.
 
 The codebase started as a Rust port of the algorithms from [trishullab/cflobdd](https://github.com/trishullab/cflobdd); algorithm provenance is credited in source comments where applicable. seaflowbdd is its own implementation with its own data layout and lifecycle.
 
@@ -89,7 +89,31 @@ See `PLAN.md` in the repo for the full design document, including the bounded-co
 
 ## Performance
 
-Performance comparison and Phase 2 optimization work is in flight; numbers will appear in a future release once the engine is competitive with established BDD libraries on representative workloads.
+Microbenchmarks comparing seaflowbdd v0.2 against the trishullab/cflobdd C++ reference engine, single-threaded on Apple Silicon (M3 Max). Negative numbers favor seaflowbdd.
+
+Two cuts. **`from_scratch`** builds a fresh seaflowbdd `Manager` per iteration (cold caches every time); the C++ engine has no cache-reset API, so its caches stay warm across iterations within a benchmark. This biases toward the oracle. **`warm`** pre-builds projections outside the iter loop so both engines run on warm memo caches; this isolates the boolean-apply cost from projection construction.
+
+| Workload | seaflowbdd | C++ oracle | ratio |
+|---|---:|---:|---:|
+| `projection_construction_32` | 3.00 µs | 35.36 µs | **0.08× (11.8× faster)** |
+| `and_tree/32 from_scratch` | 34.34 µs | 40.94 µs | 0.84× (1.2× faster) |
+| `and_tree/8 from_scratch` | 15.56 µs | 10.22 µs | 1.52× |
+| `and_tree/4 from_scratch` | 8.44 µs | 5.07 µs | 1.66× |
+| `and_tree/32 warm` | 1.58 µs | 4.68 µs | 0.34× (2.9× faster) |
+| `or_tree/32 warm` | 1.61 µs | 4.67 µs | 0.34× (2.9× faster) |
+| `xor_tree/32 warm` | 1.63 µs | 4.76 µs | 0.34× (2.9× faster) |
+| `repeated_apply` (16 vars × 100 iters) | 76 µs | 226 µs | 0.34× (3.0× faster) |
+
+Every measured op is within 2× of the C++ engine's wall-clock, and most are several times faster.
+
+The principal Phase 2 wins were:
+
+- **Reduce memo cache.** The C++ engine has one; v0.1 didn't. Adding it turned warm-bench costs from "rebuild from scratch every call" into "lookup in a memo table". (~16× speedup on warm benches.)
+- **Hash-table dedup without key cloning.** The node dedup table now uses hashbrown's `HashTable` with hash + eq closures that probe directly against existing records, instead of a `HashMap<NodeRecord, NodeId>` that cloned the key on every insert.
+- **Precomputed common return maps.** The maps `[0]`, `[1]`, `[0, 1]` show up everywhere in construction; preinterning at `Manager::new` removes a HashMap lookup per use.
+- **Stack-allocated SmallVec snapshots** instead of `to_vec()` heap allocations on hot recursion paths in PairProduct, Reduce, and Restrict.
+- **FxHash for memo cache keys.** `(NodeId, NodeId)` and `(NodeId, ReturnMapId)` are u64-equivalent; FxHash beats a randomized hasher on these.
+- **Custom `Hash` impl** for `NodeRecord` that hashes packed `u64` connection fields directly, instead of the derived per-field hashing.
 
 ## Roadmap
 
@@ -100,6 +124,7 @@ Possible directions, in no particular order:
 - **Specialized fast paths** for small return-map sizes, common shape pairs (1×1, 1×2, 2×2), and SBO of B-connections inline in NodeRecord.
 - **Weighted variants** (complex, big-float, Fourier) for quantum-circuit-style applications. The C++ engine ships these; we don't yet.
 - **Bignum path counts** when `i128` overflows.
+- **Further perf work.** v0.2 hit parity-or-better on every measured workload, with at least one workload running ≥10× faster. The remaining gap on small `from_scratch` workloads (1.5×–1.7× slower than C++ on cold-cache AND-trees of 4–8 variables) is dominated by HashTable churn during structure construction; a flat-array dedup for tiny BConn shapes would close this.
 
 If any of these are interesting to you, see `CONTRIBUTING.md`.
 

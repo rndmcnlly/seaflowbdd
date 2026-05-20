@@ -12,7 +12,7 @@
 use crate::manager::{Bdd, Manager};
 use crate::node::{BConnVec, Connection, NodeId, NodeRecord, DONT_CARE, FORK};
 use crate::return_map::ReturnMapVec;
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 /// A pair-product map: a list of `(i, j)` pairs, where the result
 /// node's exit `k` corresponds to original-operand exits `(i, j)`.
@@ -156,10 +156,10 @@ impl Manager {
                 // The space is ne1 * ne2; for boolean ops these are
                 // tiny. Use a HashMap for generality; flat 2D would
                 // be a micro-opt for Phase 2.
-                let mut exit_dedup: HashMap<(u32, u32), u32> = HashMap::new();
+                let mut exit_dedup: FxHashMap<(u32, u32), u32> = FxHashMap::default();
 
-                let a1_map_body: Vec<u32> = self.return_maps.body(a1.return_map).to_vec();
-                let a2_map_body: Vec<u32> = self.return_maps.body(a2.return_map).to_vec();
+                let a1_map_body = ReturnMapVec::from_slice(self.return_maps.body(a1.return_map));
+                let a2_map_body = ReturnMapVec::from_slice(self.return_maps.body(a2.return_map));
                 debug_assert!(
                     is_identity_return_map(&a1_map_body),
                     "A-conn return map of n1 must be identity (got {:?})",
@@ -179,8 +179,10 @@ impl Manager {
                     // b_pair_map corresponds to a child exit. We need
                     // to map that child exit through the original
                     // return maps and dedup against the running pair_map.
-                    let b1c_map_body: Vec<u32> = self.return_maps.body(b1c.return_map).to_vec();
-                    let b2c_map_body: Vec<u32> = self.return_maps.body(b2c.return_map).to_vec();
+                    let b1c_map_body =
+                        ReturnMapVec::from_slice(self.return_maps.body(b1c.return_map));
+                    let b2c_map_body =
+                        ReturnMapVec::from_slice(self.return_maps.body(b2c.return_map));
 
                     let mut b_return_map = ReturnMapVec::new();
                     for &(c1, c2) in &b_pair_map {
@@ -230,8 +232,8 @@ impl Manager {
         // Build the new value map and the reduction map. For each entry
         // in pair_map, apply op to the corresponding values in f.values
         // and g.values, then dedup against the running new value list.
-        let f_vals: Vec<u32> = self.return_maps.body(f.values).to_vec();
-        let g_vals: Vec<u32> = self.return_maps.body(g.values).to_vec();
+        let f_vals = ReturnMapVec::from_slice(self.return_maps.body(f.values));
+        let g_vals = ReturnMapVec::from_slice(self.return_maps.body(g.values));
 
         // For boolean ops the range has at most 2 values; track slot
         // indices for 0 and 1 explicitly (matching the C++ trick).

@@ -58,18 +58,18 @@
 
 use crate::manager::{Bdd, Manager};
 use crate::node::{NodeId, NodeRecord, DONT_CARE, FORK};
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Memo cache keyed by NodeId. Owned by the Manager.
 #[derive(Default)]
 pub(crate) struct PathCountCache {
-    paths: HashMap<NodeId, Vec<i128>>,
+    paths: FxHashMap<NodeId, Vec<i128>>,
 }
 
 impl PathCountCache {
     pub(crate) fn new() -> Self {
         Self {
-            paths: HashMap::new(),
+            paths: FxHashMap::default(),
         }
     }
 }

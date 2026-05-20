@@ -17,8 +17,8 @@
 use crate::node::{BConnVec, Connection, NodeId, NodeRecord, NodeStore, DONT_CARE, FORK};
 use crate::pair_product::PairProductMemo;
 use crate::path_count::PathCountCache;
-use crate::return_map::{ReturnMapId, ReturnMapStore, ReturnMapVec};
-use hashbrown::HashMap;
+use crate::return_map::{ReturnMapId, ReturnMapStore};
+use rustc_hash::FxHashMap;
 
 /// A user-facing CFLOBDD: a (root node, value map) pair, both interned.
 ///
@@ -43,12 +43,23 @@ pub struct Manager {
     no_distinction: Vec<Option<NodeId>>,
     /// PairProduct memo cache: keyed on (n1, n2). Symmetric lookup
     /// (we also check (n2, n1) and flip).
-    pub(crate) pair_product_cache: HashMap<(NodeId, NodeId), PairProductMemo>,
-    /// Path-count memo cache (M7). Lazily populated on first
-    /// `path_count` call; safe to keep across calls because canonical
-    /// NodeIds are immutable for the manager's lifetime (no GC in
-    /// Phase 1).
+    pub(crate) pair_product_cache: FxHashMap<(NodeId, NodeId), PairProductMemo>,
+    /// Reduce memo cache: keyed on (node, interned reduction map id).
+    /// Mirrors C++ `reduceCache` in `cflobdd_node.cpp:386-408`. Reduce is
+    /// pure in (node, red), so identical inputs always produce the same
+    /// output node; this cache turns repeat reduce calls into O(1).
+    pub(crate) reduce_cache: FxHashMap<(NodeId, ReturnMapId), NodeId>,
+    /// Path-count memo cache. Lazily populated on first `path_count`
+    /// call; safe to keep across calls because canonical NodeIds are
+    /// immutable for the manager's lifetime (no GC).
     pub(crate) path_counts: PathCountCache,
+
+    // -- Precomputed common return maps. These show up everywhere in
+    //    construction; precomputing avoids re-interning the same body
+    //    on each call.
+    pub(crate) rm_singleton_0: ReturnMapId,
+    pub(crate) rm_singleton_1: ReturnMapId,
+    pub(crate) rm_identity_2: ReturnMapId,
 }
 
 impl Manager {
@@ -60,13 +71,21 @@ impl Manager {
             level <= 30,
             "level > 30 implies > 1B variables; not supported"
         );
+        let mut return_maps = ReturnMapStore::new();
+        let rm_singleton_0 = return_maps.singleton(0);
+        let rm_singleton_1 = return_maps.singleton(1);
+        let rm_identity_2 = return_maps.identity(2);
         Self {
             nodes: NodeStore::new(),
-            return_maps: ReturnMapStore::new(),
+            return_maps,
             level,
             no_distinction: vec![None; (level + 1) as usize],
-            pair_product_cache: HashMap::new(),
+            pair_product_cache: FxHashMap::default(),
+            reduce_cache: FxHashMap::default(),
             path_counts: PathCountCache::new(),
+            rm_singleton_0,
+            rm_singleton_1,
+            rm_identity_2,
         }
     }
 
@@ -102,7 +121,7 @@ impl Manager {
             return id;
         }
         let child = self.no_distinction(k - 1);
-        let map = self.return_maps.singleton(0);
+        let map = self.rm_singleton_0;
         let a = Connection {
             target: child,
             return_map: map,
@@ -122,14 +141,14 @@ impl Manager {
     /// The constant-true CFLOBDD over `2^level` variables.
     pub fn mk_true(&mut self) -> Bdd {
         let root = self.no_distinction(self.level);
-        let values = self.return_maps.singleton(1);
+        let values = self.rm_singleton_1;
         Bdd { root, values }
     }
 
     /// The constant-false CFLOBDD over `2^level` variables.
     pub fn mk_false(&mut self) -> Bdd {
         let root = self.no_distinction(self.level);
-        let values = self.return_maps.singleton(0);
+        let values = self.rm_singleton_0;
         Bdd { root, values }
     }
 
@@ -150,7 +169,7 @@ impl Manager {
         let root = self.mk_distinction(self.level, var_index);
         // Value map is the identity [0, 1]: exit 0 of the structural node
         // means "x_i = 0", exit 1 means "x_i = 1".
-        let values = self.return_maps.identity(2);
+        let values = self.rm_identity_2;
         Bdd { root, values }
     }
 
@@ -165,22 +184,14 @@ impl Manager {
         if i < half {
             // i falls in the A-connection range.
             let a_target = self.mk_distinction(level - 1, i);
-            let id_map = self.return_maps.identity(2);
+            let id_map = self.rm_identity_2;
             let a = Connection {
                 target: a_target,
                 return_map: id_map,
             };
             let nd = self.no_distinction(level - 1);
-            let map_0: ReturnMapId = {
-                let mut v = ReturnMapVec::new();
-                v.push(0);
-                self.return_maps.intern(v)
-            };
-            let map_1: ReturnMapId = {
-                let mut v = ReturnMapVec::new();
-                v.push(1);
-                self.return_maps.intern(v)
-            };
+            let map_0 = self.rm_singleton_0;
+            let map_1 = self.rm_singleton_1;
             let mut b_conns = BConnVec::new();
             b_conns.push(Connection {
                 target: nd,
@@ -194,13 +205,13 @@ impl Manager {
         } else {
             // i falls in the B-connection range; mask off the high bit.
             let nd = self.no_distinction(level - 1);
-            let id1 = self.return_maps.singleton(0);
+            let id1 = self.rm_singleton_0;
             let a = Connection {
                 target: nd,
                 return_map: id1,
             };
             let b_target = self.mk_distinction(level - 1, i ^ half);
-            let id2 = self.return_maps.identity(2);
+            let id2 = self.rm_identity_2;
             let mut b_conns = BConnVec::new();
             b_conns.push(Connection {
                 target: b_target,

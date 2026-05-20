@@ -12,7 +12,7 @@
 use crate::manager::Manager;
 use crate::node::{BConnVec, Connection, NodeId, NodeRecord, DONT_CARE, FORK};
 use crate::return_map::{ReturnMapId, ReturnMapVec};
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 impl Manager {
     /// Public entry point. `red` has length equal to `node`'s `num_exits`,
@@ -30,7 +30,18 @@ impl Manager {
         if is_identity(red) {
             return node;
         }
-        self.reduce_inner(node, red, new_num_exits)
+        // Memo: intern the reduction map and check the cache. Mirrors C++
+        // reduceCache in cflobdd_node.cpp:386-408.
+        let red_id = {
+            let body = ReturnMapVec::from_slice(red);
+            self.return_maps.intern(body)
+        };
+        if let Some(&cached) = self.reduce_cache.get(&(node, red_id)) {
+            return cached;
+        }
+        let result = self.reduce_inner(node, red, new_num_exits);
+        self.reduce_cache.insert((node, red_id), result);
+        result
     }
 
     fn reduce_inner(&mut self, node: NodeId, red: &[u32], new_num_exits: u32) -> NodeId {
@@ -76,10 +87,11 @@ impl Manager {
                 // A-reduction map.
                 let mut new_b_conns: BConnVec = BConnVec::new();
                 let mut a_red: ReturnMapVec = ReturnMapVec::new();
-                let mut seen: HashMap<(NodeId, ReturnMapId), u32> = HashMap::new();
+                let mut seen: FxHashMap<(NodeId, ReturnMapId), u32> = FxHashMap::default();
 
                 for b in &b_conns {
-                    let child_map_body = self.return_maps.body(b.return_map).to_vec();
+                    let child_map_body =
+                        ReturnMapVec::from_slice(self.return_maps.body(b.return_map));
                     let (induced_red, induced_return_map_id, induced_num_exits) =
                         self.compose_and_reduce(&child_map_body, red);
                     let new_target = self.reduce(b.target, &induced_red, induced_num_exits);
@@ -100,7 +112,8 @@ impl Manager {
                 // a_red now has length numBConnections (the original); it
                 // is the reduction map for the A-connection's exit space.
                 let new_a_num_exits = new_b_conns.len() as u32;
-                let a_child_map_body = self.return_maps.body(a_conn.return_map).to_vec();
+                let a_child_map_body =
+                    ReturnMapVec::from_slice(self.return_maps.body(a_conn.return_map));
                 let (induced_a_red, new_a_return_map_id, new_a_num_exits_after_compose) =
                     self.compose_and_reduce(&a_child_map_body, &a_red);
                 let new_a_target =

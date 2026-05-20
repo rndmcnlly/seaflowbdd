@@ -18,8 +18,10 @@
 //! per-node bytes mattering. For now: legibility first.
 
 use crate::return_map::ReturnMapId;
-use hashbrown::HashMap;
+use hashbrown::HashTable;
+use rustc_hash::FxHasher;
 use smallvec::SmallVec;
+use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
 
 /// Stable, copyable index into a `Manager`'s node store.
 ///
@@ -32,10 +34,26 @@ pub struct NodeId(pub(crate) u32);
 /// node; the `return_map` translates the child's exit indices into the
 /// parent's exit space (or, in the case of A-connection, into B-connection
 /// indices).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Connection {
     pub target: NodeId,
     pub return_map: ReturnMapId,
+}
+
+impl Connection {
+    /// Pack into a u64: target in low 32 bits, return_map in high 32.
+    /// Used for fast hashing.
+    #[inline(always)]
+    fn pack(&self) -> u64 {
+        (self.target.0 as u64) | ((self.return_map.0 as u64) << 32)
+    }
+}
+
+impl std::hash::Hash for Connection {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.pack());
+    }
 }
 
 /// Inline storage for B-connections. ≤ 4 covers typical boolean ops
@@ -44,7 +62,7 @@ pub(crate) type BConnVec = SmallVec<[Connection; 4]>;
 
 /// The node payload. Internal carries data; the two leaves are unit
 /// variants.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum NodeRecord {
     /// Level-0 don't-care leaf: $f(x) = c$ for some constant. Singleton.
     DontCare,
@@ -60,14 +78,53 @@ pub(crate) enum NodeRecord {
     },
 }
 
+impl std::hash::Hash for NodeRecord {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            NodeRecord::DontCare => state.write_u8(0),
+            NodeRecord::Fork => state.write_u8(1),
+            NodeRecord::Internal {
+                level,
+                num_exits,
+                a_conn,
+                b_conns,
+            } => {
+                // Mix level, num_exits, and a_conn into a single u64 + u32.
+                state.write_u8(2);
+                state.write_u32(*level as u32);
+                state.write_u32(*num_exits);
+                state.write_u64(a_conn.pack());
+                // Hash B-conns as packed u64s. Length first to avoid
+                // collision between e.g. [(a,b)] and [(a,b), zero].
+                state.write_usize(b_conns.len());
+                for b in b_conns {
+                    state.write_u64(b.pack());
+                }
+            }
+        }
+    }
+}
+
 /// Canonical node store + dedup table. Module-private; only the factory
 /// methods on `Manager` produce `NodeId`s.
+///
+/// The dedup table is a `HashTable` of `NodeId`s rather than a
+/// `HashMap<NodeRecord, NodeId>`. This lets us look up by *probing*
+/// against existing records in `records` without ever constructing a
+/// `NodeRecord` clone for the key. Each lookup hashes the candidate
+/// fields once, walks the bucket via Eq closure that compares fields
+/// against `records[id]`. Insert appends to `records` and adds the
+/// `NodeId` to the table.
 pub(crate) struct NodeStore {
     /// Indexed by `NodeId.0`. Index 0 = DontCare, index 1 = Fork.
     records: Vec<NodeRecord>,
-    /// Dedup table for internal nodes. Leaves are not indexed here (they
-    /// have fixed ids, looked up directly).
-    index: HashMap<NodeRecord, NodeId>,
+    /// Dedup table for internal nodes. Stores only ids; the records
+    /// themselves live in `records`.
+    index: HashTable<NodeId>,
+    /// Hash builder used to derive bucket indices. We compute hashes
+    /// directly on candidate fields and on existing `NodeRecord`s.
+    hasher: BuildHasherDefault<FxHasher>,
 }
 
 /// Sentinel NodeIds for the two level-0 leaves.
@@ -79,8 +136,31 @@ impl NodeStore {
         let records = vec![NodeRecord::DontCare, NodeRecord::Fork];
         Self {
             records,
-            index: HashMap::new(),
+            index: HashTable::new(),
+            hasher: BuildHasherDefault::default(),
         }
+    }
+
+    /// Hash an Internal candidate without constructing a NodeRecord.
+    #[inline]
+    fn hash_candidate(
+        &self,
+        level: u8,
+        num_exits: u32,
+        a_conn: Connection,
+        b_conns: &[Connection],
+    ) -> u64 {
+        let mut h = self.hasher.build_hasher();
+        // Mirror the body of `Hash for NodeRecord::Internal`.
+        h.write_u8(2);
+        h.write_u32(level as u32);
+        h.write_u32(num_exits);
+        h.write_u64(a_conn.pack());
+        h.write_usize(b_conns.len());
+        for b in b_conns {
+            h.write_u64(b.pack());
+        }
+        h.finish()
     }
 
     /// Hash-cons an internal node. Identical structure returns the same id.
@@ -97,18 +177,45 @@ impl NodeStore {
             !b_conns.is_empty(),
             "internal nodes must have ≥ 1 B-connection"
         );
-        let key = NodeRecord::Internal {
+
+        let hash = self.hash_candidate(level, num_exits, a_conn, &b_conns);
+        // Probe by hash + field equality, without ever constructing a
+        // NodeRecord for the lookup key.
+        if let Some(&id) = self.index.find(hash, |&existing_id| {
+            match &self.records[existing_id.0 as usize] {
+                NodeRecord::Internal {
+                    level: el,
+                    num_exits: en,
+                    a_conn: ea,
+                    b_conns: eb,
+                } => {
+                    *el == level
+                        && *en == num_exits
+                        && *ea == a_conn
+                        && eb.as_slice() == b_conns.as_slice()
+                }
+                _ => false,
+            }
+        }) {
+            return id;
+        }
+        // Miss: build the record once, push to records, insert id.
+        let id = NodeId(self.records.len() as u32);
+        let record = NodeRecord::Internal {
             level,
             num_exits,
             a_conn,
             b_conns,
         };
-        if let Some(id) = self.index.get(&key) {
-            return *id;
-        }
-        let id = NodeId(self.records.len() as u32);
-        self.index.insert(key.clone(), id);
-        self.records.push(key);
+        self.records.push(record);
+        // Use the same hash; rehasher closure looks up the record by id.
+        let records_ptr = &self.records;
+        let hasher = &self.hasher;
+        self.index.insert_unique(hash, id, |&existing_id| {
+            let mut h = hasher.build_hasher();
+            std::hash::Hash::hash(&records_ptr[existing_id.0 as usize], &mut h);
+            h.finish()
+        });
         id
     }
 

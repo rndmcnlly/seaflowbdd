@@ -2,3 +2,8 @@
 Cargo.lock
 *.swp
 .DS_Store
+
+# Phase 2 dev environment: criterion benches + oracle-parity tests that
+# depend on the C++ engine via the cflobdd bindgen wrapper. Local-only;
+# never committed.
+/dev/

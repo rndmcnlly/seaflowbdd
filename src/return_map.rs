@@ -7,7 +7,7 @@
 //! Most return maps are tiny (≤ 4 entries), so we store the data inline
 //! when small via `SmallVec`. Dedup is keyed on the contents.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 /// Stable, copyable index into a `Manager`'s return-map store.
@@ -25,14 +25,14 @@ pub(crate) struct ReturnMapStore {
     /// Dedup table: contents -> id. The key clones are unavoidable for the
     /// initial implementation; can be optimized later with a custom raw-entry
     /// scheme that hashes the slice without owning it.
-    index: HashMap<ReturnMapVec, ReturnMapId>,
+    index: FxHashMap<ReturnMapVec, ReturnMapId>,
 }
 
 impl ReturnMapStore {
     pub(crate) fn new() -> Self {
         Self {
             bodies: Vec::new(),
-            index: HashMap::new(),
+            index: FxHashMap::default(),
         }
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "seaflowbdd"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Native Rust engine for Context-Free-Language Ordered Binary Decision Diagrams (CFLOBDDs). Unweighted boolean operations: AND, OR, XOR, NOT, restrict, compose, exists, forall, evaluate, satisfying-assignment count."
 license = "MIT"
@@ -15,6 +15,7 @@ path = "src/lib.rs"
 
 [dependencies]
 hashbrown = "0.15"
+rustc-hash = "2"
 smallvec = "1"
 
 [dev-dependencies]

@@ -38,7 +38,7 @@
 use crate::manager::{Bdd, Manager};
 use crate::node::{BConnVec, Connection, NodeId, NodeRecord, DONT_CARE};
 use crate::return_map::{ReturnMapId, ReturnMapVec};
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 impl Manager {
     /// `restrict(f, x_i, v)`: substitute the constant `v` for variable
@@ -59,7 +59,7 @@ impl Manager {
         // (cflobdd_top_node_int.cpp:445-455)
         //
         // new_values_seq[i] = f.values[MapHandle[i]]
-        let f_values_body = self.return_maps.body(f.values).to_vec();
+        let f_values_body = ReturnMapVec::from_slice(self.return_maps.body(f.values));
         let composed: Vec<u32> = map_handle
             .iter()
             .map(|&d| f_values_body[d as usize])
@@ -167,7 +167,7 @@ impl Manager {
         // Translate a_map (which is in the A-conn target's exit space)
         // through a_conn.return_map to land in the parent's B-conn
         // index space.
-        let a_conn_map_body = self.return_maps.body(a_conn.return_map).to_vec();
+        let a_conn_map_body = ReturnMapVec::from_slice(self.return_maps.body(a_conn.return_map));
         let b_indices: Vec<u32> = a_map
             .iter()
             .map(|&child_exit| a_conn_map_body[child_exit as usize])
@@ -181,7 +181,7 @@ impl Manager {
         let mut cur_exit: u32 = 0;
         for &b in &b_indices {
             let orig = b_conns[b as usize];
-            let orig_rm = self.return_maps.body(orig.return_map).to_vec();
+            let orig_rm = ReturnMapVec::from_slice(self.return_maps.body(orig.return_map));
             let mut new_rm = ReturnMapVec::new();
             for &c in &orig_rm {
                 let pos = match map_handle.iter().position(|&x| x == c) {
@@ -243,7 +243,7 @@ impl Manager {
     ) -> NodeId {
         let mut new_b_conns: BConnVec = BConnVec::new();
         let mut a_reduction: Vec<u32> = Vec::with_capacity(b_conns.len());
-        let mut b_dedup: HashMap<(NodeId, ReturnMapId), u32> = HashMap::new();
+        let mut b_dedup: FxHashMap<(NodeId, ReturnMapId), u32> = FxHashMap::default();
         let mut cur_exit: u32 = 0;
 
         for orig_b in b_conns {
@@ -253,7 +253,7 @@ impl Manager {
             // Compose b_map with this B-conn's return map to get the
             // global parent-exit index for each new exit of `m`.
             // (cflobdd_node.cpp:2140)
-            let orig_rm = self.return_maps.body(orig_b.return_map).to_vec();
+            let orig_rm = ReturnMapVec::from_slice(self.return_maps.body(orig_b.return_map));
             let mut induced = ReturnMapVec::new();
             for &child_exit in &b_map {
                 let c = orig_rm[child_exit as usize];
@@ -291,7 +291,7 @@ impl Manager {
         // producing reduced_a_return_map of length = original A-conn
         // num_exits. Then dedupe (induced_a_reduction over a_conn's
         // child) and Reduce the A-conn's target.
-        let a_conn_rm = self.return_maps.body(a_conn.return_map).to_vec();
+        let a_conn_rm = ReturnMapVec::from_slice(self.return_maps.body(a_conn.return_map));
         let composed_a_rm: Vec<u32> = a_conn_rm
             .iter()
             .map(|&old_b_idx| a_reduction[old_b_idx as usize])
